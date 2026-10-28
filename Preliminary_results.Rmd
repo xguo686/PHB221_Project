@@ -1,0 +1,186 @@
+---
+title: "Preliminary_results"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Diabetes Dataset Multiple Regression \
+Running simple model for multiple regression
+
+# Data Preview
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(car)
+diabetes <- read.csv("https://data.mendeley.com/public-files/datasets/xv25yjbzkm/files/a0843021-a3bd-4737-96c0-a19cacb84e54/file_downloaded")
+diabetes <- na.omit(diabetes) #Clear rows with missing values in this case there are none
+head(diabetes, 10)
+
+# Make column names easier to type
+names(diabetes) <- make.names(names(diabetes))
+
+# Convert text variables to categorical variables
+diabetes$Gender <- as.factor(diabetes$Gender)
+diabetes$Family.History <- as.factor(diabetes$Family.History)
+diabetes$Hypertension <- as.factor(diabetes$Hypertension) 
+diabetes$Outcome <- as.factor(diabetes$Outcome) 
+diabetes$Physical.Activity <- as.factor(diabetes$Physical.Activity)
+diabetes$Smoking.Status <- as.factor(diabetes$Smoking.Status)
+diabetes$Alcohol.Intake <- as.factor(diabetes$Alcohol.Intake) 
+
+# Basic inspection
+dim(diabetes)
+head(diabetes)
+str(diabetes)
+summary(diabetes)
+
+# Missing values and duplicate rows
+colSums(is.na(diabetes))
+sum(duplicated(diabetes))
+```
+
+# Simple multiple reression model
+```{r}
+dmodel <- lm(Glucose ~ Gender + Age + Physical.Activity + Smoking.Status
++ Alcohol.Intake + Blood.Pressure + Skin.Thickness + Insulin + BMI
++ Cholesterol + Diabetes.Pedigree.Function + Family.History
++ Hypertension, data = diabetes)
+summary(dmodel)
+```
+
+# Residual plots
+```{r}
+residualPlots(dmodel)
+```
+
+# Plot distibutions
+```{r}
+# Four plots in one plotting window
+par(mfrow = c(2, 2))
+
+hist(diabetes$Glucose,
+     main = "Distribution of glucose",
+     xlab = "Glucose", col = "lightblue", breaks = 30)
+
+hist(diabetes$BMI,
+     main = "Distribution of BMI",
+     xlab = "BMI", col = "lightgreen", breaks = 30)
+
+hist(diabetes$Age,
+     main = "Distribution of age",
+     xlab = "Age", col = "wheat", breaks = 20)
+
+barplot(table(diabetes$Outcome),
+        main = "Diabetes status",
+        ylab = "Number of observations",
+        col = c("lightblue", "salmon"))
+
+par(mfrow = c(1, 1))
+```
+
+# Explore relationships
+```{r}
+par(mfrow = c(2, 2))
+
+plot(Glucose ~ BMI, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus BMI")
+abline(lm(Glucose ~ BMI, data = diabetes),
+       col = "red", lwd = 2)
+
+plot(Glucose ~ Age, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus age")
+abline(lm(Glucose ~ Age, data = diabetes),
+       col = "red", lwd = 2)
+
+plot(Glucose ~ Blood.Pressure, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus blood pressure")
+abline(lm(Glucose ~ Blood.Pressure, data = diabetes),
+       col = "red", lwd = 2)
+
+plot(Glucose ~ Skin.Thickness, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus skin thickness")
+abline(lm(Glucose ~ Skin.Thickness, data = diabetes),
+       col = "red", lwd = 2)
+
+plot(Glucose ~ Cholesterol, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus cholesterol")
+abline(lm(Glucose ~ Cholesterol, data = diabetes),
+       col = "red", lwd = 2)
+
+plot(Glucose ~ Diabetes.Pedigree.Function, data = diabetes,
+     pch = 16, col = adjustcolor("steelblue", alpha.f = 0.1),
+     main = "Glucose versus diabetes pedigree function")
+abline(lm(Glucose ~ Diabetes.Pedigree.Function, data = diabetes),
+       col = "red", lwd = 2)
+
+boxplot(Glucose ~ Physical.Activity, data = diabetes,
+        main = "Glucose by activity level",
+        xlab = "Physical activity", ylab = "Glucose",
+        col = "lightblue")
+
+boxplot(Glucose ~ Smoking.Status, data = diabetes,
+        main = "Glucose by smoking status",
+        xlab = "Smoking status", ylab = "Glucose",
+        col = "lightblue")
+
+boxplot(Glucose ~ Alcohol.Intake, data = diabetes,
+        main = "Glucose by alcohol intake",
+        xlab = "Alcohol intake", ylab = "Glucose",
+        col = "lightblue")
+
+boxplot(Glucose ~ Outcome, data = diabetes,
+        main = "Glucose by diabetes status",
+        xlab = "", ylab = "Glucose",
+        col = c("lightblue", "salmon"))
+
+boxplot(Glucose ~ Family.History, data = diabetes,
+        main = "Glucose by family history",
+        xlab = "Family history", ylab = "Glucose",
+        col = c("lightblue", "salmon"))
+
+par(mfrow = c(1, 1))
+
+# Correlations among numeric variables
+numeric_data <- diabetes[vapply(diabetes, is.numeric, logical(1))]
+round(cor(numeric_data, use = "complete.obs"), 3)
+```
+
+# More regression models
+```{r}
+# Simple linear regression
+m1 <- lm(Glucose ~ BMI, data = diabetes)
+
+# Adjust for age and gender
+m2 <- lm(Glucose ~ BMI + Age + Gender, data = diabetes)
+
+# Add physical activity
+m3 <- lm(
+  Glucose ~ BMI + Age + Gender + Physical.Activity,
+  data = diabetes
+)
+
+summary(m1)
+summary(m2)
+summary(m3)
+
+# Confidence intervals for the coefficients
+confint(m3)
+
+# Compare nested models
+# These comparisons require models fitted to the same observations.
+anova(m1, m2, m3)
+
+# Standard regression diagnostic plots
+par(mfrow = c(2, 2))
+plot(m3)
+par(mfrow = c(1, 1))
+```

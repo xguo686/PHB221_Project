@@ -1,0 +1,159 @@
+---
+title: "PHB 221 Final Project"
+author: "Sarah Alegre"
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(haven) # to read .XPT files 
+library(dplyr) # data manipulation
+library(purrr)
+library(tidyr)
+library(ggplot2)
+library(car)
+
+```
+
+## R Load Data
+```{r load_data, include=TRUE}
+
+# 11 files from NHANES that we want - has our predictors & outcome 
+files <- c("DEMO_J", "GLU_J", "BMX_J", "BPX_J", "DIQ_J",
+           "HDL_J", "TRIGLY_J", "INS_J", "ALQ_J", "PAQ_J", "SMQ_J")
+
+# web address for 2017-2018 nhanes data 
+base <- "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2017/DataFiles/"
+
+# for each name in files (above) - download 
+tables <- map(files, function(f) {
+  tmp <- tempfile(fileext = ".xpt")
+  download.file(paste0(base, f, ".XPT"), tmp, mode = "wb")
+  
+  # turn downloaded file into readable table
+  read_xpt(tmp)
+  
+})
+
+# label each of 11 tables with file name for later use 
+names(tables) <- files
+
+```
+
+## Current list of data files
+
+DEMO_J = demographic data
+BPX_J = blood pressure
+BMX_J = body measurements
+GLU_J = plasma fasting glucose 
+HDL_J = Cholesterol - High - Density Lipoprotein (HDL)
+TRIGLY_J = Cholesterol - Low-Density Lipoproteins (LDL) & Triglycerides
+INS_J = insulin 
+DIQ_J = diabetes 
+ALQ_J = alcohol use 
+PAQ_J = physical activity 
+SMQ_J - cigarette use 
+
+```{r select_rows, include=TRUE}
+
+# join 11 tables from data load into one large table called nhanes - match on SEQN (participant ID)
+nhanes <- reduce(tables, left_join, by = "SEQN")
+
+# will be number of people in demographics file (first table)
+cat("Rows after merge:", nrow(nhanes), "\n")
+
+# narrow down to columns of interest 
+nhanes_small <- nhanes %>%
+  select(SEQN,                          # participant ID
+         glucose = LBXGLU,              # fasting glucose (outcome)
+         age = RIDAGEYR,                # age
+         sex_code = RIAGENDR,           # sex
+         pregnant = RIDEXPRG,           # pregnancy (filter only)
+         bmi = BMXBMI,                  # BMI
+         sys_bp1 = BPXSY1,              # systolic BP readings (to average)
+         sys_bp2 = BPXSY2,              # systolic BP readings (to average)
+         sys_bp3 = BPXSY3,              # systolic BP readings (to average)
+         hdl = LBDHDD,                  # HDL
+         triglycerides = LBXTR,         # triglycerides
+         insulin = LBXIN,               # insulin (optional extra)
+         dx_diabetes = DIQ010,          # diabetes diagnosis
+         on_insulin = DIQ050,           # diabetes on insulin
+         on_pills = DIQ070,             # diabetes on meds (filter only)
+         smoked_100 = SMQ020,           # smoked 100+ cigarettes in life
+         vigorous_rec = PAQ650,         # vigorous recreational activity 
+         moderate_rec = PAQ665)         # moderate recreational activity
+
+cat("Columns kept:", ncol(nhanes_small), "\n")
+
+```
+
+
+```{r filter_data, include=TRUE}
+
+# keep adults (18+) who have a fasting glucose value
+nhanes_fasting <- nhanes_small %>% filter(!is.na(glucose), age >= 18)
+cat("Adults with fasting glucose:", nrow(nhanes_fasting), "\n")
+
+# exclude pregnant women
+nhanes_not_pregnant <- nhanes_fasting %>% filter(is.na(pregnant) | pregnant != 1)
+cat("After excluding pregnant:", nrow(nhanes_not_pregnant), "\n")
+
+# make data for model (from the one excluding pregnant women and only with fasting glucose adults)
+nhanes_variables <- nhanes_not_pregnant %>%
+  mutate(
+    sex = factor(sex_code, levels = c(1, 2), labels = c("Male", "Female")), # categorical label for M/F
+    sys_bp = rowMeans(select(., sys_bp1, sys_bp2, sys_bp3), na.rm = TRUE), # average 3 systolic BP
+    sys_bp = ifelse(is.nan(sys_bp), NA, sys_bp),
+    smoker = case_when(smoked_100 == 1 ~ 1, smoked_100 == 2 ~ 0), # give 1 if person smoked 100+ ciggs (0 other)
+    active_rec = case_when(vigorous_rec == 1 | moderate_rec == 1 ~ 1, # give 1 if person does vigorous or moderate recreational activity (0 other)
+                           vigorous_rec == 2 & moderate_rec == 2 ~ 0),
+    diabetes_dx = if_else(dx_diabetes %in% 1 | on_insulin %in% 1 | on_pills %in% 1, 1, 0) # 1 if person told they have diabetes, takes meds for db
+  )
+
+# checks
+table(nhanes_variables$diabetes_dx, useNA = "ifany")
+table(nhanes_variables$smoker, useNA = "ifany")
+table(nhanes_variables$active_rec, useNA = "ifany")
+table(nhanes_variables$sex_code, nhanes_variables$sex)
+summary(nhanes_variables$sys_bp)
+
+head(nhanes_variables)
+```
+```{r missing_data, include=TRUE}
+
+# count blanks in every column
+colSums(is.na(nhanes_variables))
+
+# columns the model needs: outcome + 8 predictors
+core <- c("glucose", "age", "sex", "bmi", "sys_bp",
+          "hdl", "triglycerides", "smoker", "active_rec")
+
+# keep only people with no blanks in those columns
+nhanes_model_data <- nhanes_variables %>% drop_na(all_of(core))
+cat("Final modeling sample:", nrow(nhanes_model_data), "\n")
+
+# save 
+write.csv(nhanes_model_data, "nhanes_glucose_model.csv", row.names = FALSE)
+
+# relabel as No/Yes for plots and models
+nhanes_model_data$smoker <- factor(nhanes_model_data$smoker, levels = c(0, 1), labels = c("No", "Yes"))
+nhanes_model_data$active_rec <- factor(nhanes_model_data$active_rec, levels = c(0, 1), labels = c("No", "Yes"))
+
+head(nhanes_model_data)
+
+
+```
+
+
+
+```{r summary_statistics, include=TRUE}
+
+model1 <- lm(log(glucose) ~ age + sex + bmi + sys_bp + hdl + log(triglycerides) + smoker + active_rec, data = nhanes_model_data)
+
+summary(model1)
+
+residualPlots(model1)
+
+```

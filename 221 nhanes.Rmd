@@ -21,6 +21,7 @@ glucose?
 library(tidyverse)
 library(haven)
 library(broom)
+library(car)
 ```
 
 ## 2.1 Load and merge the files
@@ -167,5 +168,6 @@ model <- lm(log(glucose) ~ age10 + sex + activity + alcohol +
               smoking + bmi5 + sbp10 + hdl10 + ldl10 + log2tg, data = d)
 
 summary(model)
+residualPlots(model)
 ```
 

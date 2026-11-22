@@ -1,0 +1,171 @@
+---
+title: "Factors Associated with Fasting Blood Glucose Among US Adults Without Diagnosed
+  Diabetes (NHANES 2017-2018)"
+author: "Sanjana Menon"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+# 1. Question
+
+Among US adults aged 18 and older without diagnosed diabetes, which
+demographic, lifestyle and clinical factors are associated with fasting blood
+glucose?
+
+# 2. Data
+
+```{r packages}
+library(tidyverse)
+library(haven)
+library(broom)
+```
+
+## 2.1 Load and merge the files
+
+```{r load}
+base <- "https://wwwn.cdc.gov/Nchs/Data/Nhanes/Public/2017/DataFiles/"
+dir.create("nhanes_data", showWarnings = FALSE)
+
+files <- list(
+  DEMO_J   = c("SEQN", "RIAGENDR", "RIDAGEYR", "RIDEXPRG"),
+  GLU_J    = c("SEQN", "LBXGLU", "WTSAF2YR"),
+  BMX_J    = c("SEQN", "BMXBMI"),
+  BPX_J    = c("SEQN", "BPXSY1", "BPXSY2", "BPXSY3"),
+  HDL_J    = c("SEQN", "LBDHDD"),
+  TRIGLY_J = c("SEQN", "LBXTR", "LBDLDL"),
+  DIQ_J    = c("SEQN", "DIQ010", "DIQ050", "DIQ070"),
+  PAQ_J    = c("SEQN", "PAQ605", "PAQ610", "PAD615", "PAQ620", "PAQ625",
+               "PAD630", "PAQ635", "PAQ640", "PAD645", "PAQ650", "PAQ655",
+               "PAD660", "PAQ665", "PAQ670", "PAD675"),
+  ALQ_J    = c("SEQN", "ALQ111", "ALQ121", "ALQ130"),
+  SMQ_J    = c("SEQN", "SMQ020", "SMQ040")
+)
+
+# keeping the columns only needed
+read_nhanes <- function(name, cols) {
+  path <- file.path("nhanes_data", paste0(name, ".XPT"))
+  if (!file.exists(path)) {
+    download.file(paste0(base, name, ".XPT"), path, mode = "wb")
+  }
+  read_xpt(path) %>% select(any_of(cols))
+}
+
+tables <- imap(files, ~ read_nhanes(.y, .x))
+nhanes <- reduce(tables, left_join, by = "SEQN")
+nrow(nhanes)
+```
+
+## 2.2 Create the variables
+
+```{r variables}
+# minutes per week of one activity
+week_min <- function(yn, days, mins) 
+  {case_when(yn == 2 ~ 0, yn == 1 & days %in% 1:7 & mins < 7777 ~ days * mins,
+            TRUE ~ NA_real_)}
+
+dat <- nhanes %>%
+mutate(
+    glucose = LBXGLU,
+    age = RIDAGEYR,
+    bmi = BMXBMI,
+    sex = factor(RIAGENDR, levels = c(1, 2), labels = c("Male", "Female")),
+
+# average of the systolic blood pressure
+sbp = rowMeans(cbind(BPXSY1, BPXSY2, BPXSY3), na.rm = TRUE),
+sbp = ifelse(is.nan(sbp), NA, sbp),
+
+# physical activity: weekly minutes, vigorous counts double
+    vig = week_min(PAQ605, PAQ610, PAD615) + week_min(PAQ650, PAQ655, PAD660),
+    mod = week_min(PAQ620, PAQ625, PAD630) + week_min(PAQ635, PAQ640, PAD645) +
+          week_min(PAQ665, PAQ670, PAD675),
+    minutes = mod + 2 * vig,
+    activity = case_when(minutes >= 150 ~ "Meets guideline",
+                         minutes > 0 ~ "Some activity",
+                         minutes == 0 ~ "Inactive"),
+    activity = factor(activity, levels = c("Meets guideline",
+                                           "Some activity", "Inactive")),
+
+# alcohol: drinks per drinking day (limit: men 2, women 1)
+    alcohol = case_when(
+      ALQ111 %in% 2 | ALQ121 %in% 0 ~ "None in past year",
+      ALQ121 %in% c(77, 99) | ALQ130 %in% c(777, 999) |
+        is.na(ALQ130) ~ NA_character_,
+      (RIAGENDR == 1 & ALQ130 <= 2) | (RIAGENDR == 2 & ALQ130 <= 1) ~
+        "Within limits",
+      TRUE ~ "Above limits"),
+    alcohol = factor(alcohol, levels = c("None in past year",
+                                         "Within limits", "Above limits")),
+
+    smoking = case_when(SMQ020 == 2 ~ "Never",
+                        SMQ020 == 1 & SMQ040 == 3 ~ "Former",
+                        SMQ020 == 1 & SMQ040 %in% c(1, 2) ~ "Current"),
+    smoking = factor(smoking, levels = c("Never", "Former", "Current")),
+
+# glucose ranges
+    glucose_range = cut(glucose, breaks = c(-Inf, 100, 126, Inf), right = FALSE,
+                        labels = c("Normal", "Prediabetes", "Diabetes range")),
+
+# rescaled so one unit is easier to explain
+    age10 = age / 10,           # per 10 years
+    bmi5 = bmi / 5,             # per 5 BMI units
+    sbp10 = sbp / 10,           # per 10 mmHg
+    hdl10 = LBDHDD / 10,        # per 10 mg/dL
+    ldl10 = LBDLDL / 10,        # per 10 mg/dL
+    log2tg = log2(LBXTR),       # triglycerides, +1 means doubled
+
+# used only to exclude people
+    pregnancy = case_when(RIDEXPRG %in% 1 ~ "Pregnant",
+                          RIDEXPRG %in% 3 ~ "Cannot tell",
+                          TRUE ~ "OK"),
+    diabetes = as.integer(DIQ010 %in% 1 | DIQ050 %in% 1 | DIQ070 %in% 1)
+  )
+```
+
+## 2.3 Choose who is in the study
+
+```{r sample}
+s1 <- dat %>% filter(!is.na(glucose), WTSAF2YR > 0)    # fasted glucose measured
+s2 <- s1 %>% filter(age >= 18)                         # adults
+s3 <- s2 %>% filter(pregnancy == "OK")                 # not pregnant
+s4 <- s3 %>% filter(diabetes == 0)                     # no diagnosed diabetes
+
+vars <- c("glucose", "age10", "sex", "activity", "alcohol", "smoking",
+          "bmi5", "sbp10", "hdl10", "ldl10", "log2tg")
+d <- s4 %>% drop_na(all_of(vars))                      # no missing values
+
+flow <- tibble(
+  Step = c("All participants", "Fasted, glucose measured", "Adults 18+",
+           "Not pregnant", "No diagnosed diabetes", "No missing data"),
+  N = c(nrow(nhanes), nrow(s1), nrow(s2), nrow(s3), nrow(s4), nrow(d)))
+knitr::kable(flow)
+```
+
+- Removed pregnant women because pregnancy lowers fasting glucose and raises
+triglycerides.
+- Removed people with diagnosed diabetes because their medication can change glucose.
+
+# 3. Results
+
+## 3.1 Fasting glucose in our sample
+
+```{r glucose}
+ggplot(d, aes(glucose)) +
+  geom_histogram(bins = 40, fill = "steelblue", colour = "white") +
+  labs(x = "Fasting glucose (mg/dL)", y = "Number of people")
+
+d %>% count(glucose_range) %>% mutate(percent = round(100 * n / sum(n), 1))
+```
+- glucose is skewed hence modelled using log(glucose).
+
+## 3.2 The model
+
+```{r model}
+model <- lm(log(glucose) ~ age10 + sex + activity + alcohol +
+              smoking + bmi5 + sbp10 + hdl10 + ldl10 + log2tg, data = d)
+
+summary(model)
+```
+
